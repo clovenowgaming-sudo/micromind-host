@@ -1,5 +1,6 @@
 import os, re, json, gzip, math, hashlib
 from collections import defaultdict
+from functools import lru_cache
 
 DATA = os.environ.get("DATA_DIR", "data")
 CHUNK = 1400
@@ -15,13 +16,16 @@ TOK = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 CAMEL = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")
 
 
+@lru_cache(maxsize=300000)
+def _word(w):
+    parts = tuple(p.lower() for p in CAMEL.findall(w.replace("_", " ")))
+    return (w.lower(),) + parts if len(parts) > 1 else (w.lower(),)
+
+
 def toks(s):
     out = []
     for w in TOK.findall(s):
-        out.append(w.lower())
-        parts = [p.lower() for p in CAMEL.findall(w.replace("_", " "))]
-        if len(parts) > 1:
-            out.extend(parts)
+        out.extend(_word(w))
     return [t for t in out if len(t) > 1]
 
 
@@ -59,6 +63,8 @@ class Index:
         if not t:
             return
         i = len(self.docs)
+        if i and i % 10000 == 0:
+            print("indeks: %d potongan" % i, flush=True)
         self.docs.append((src, text))
         self.boost.append(boost)
         self.dl.append(len(t))
@@ -123,7 +129,10 @@ def load_index():
                 sdk = repo.startswith("geode-sdk/")
                 if not (sdk or r["license"] in OK_LIC):
                     continue
-                for src, ch in split_text("%s/%s" % (repo, path), r["text"]):
+                chs = split_text("%s/%s" % (repo, path), r["text"])
+                if not sdk:
+                    chs = chs[:6]
+                for src, ch in chs:
                     idx.add(src, ch, 1.1 if sdk else 1.0)
     idx.finish()
     return idx
