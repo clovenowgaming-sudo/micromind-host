@@ -100,16 +100,16 @@ if not tunggu("http://127.0.0.1:8081/v1/models", 120):
     raise RuntimeError("server model gagal start")
 print("server model siap")
 
-rag = subprocess.Popen(["python", "-m", "uvicorn", "rag_server:app", "--host", "127.0.0.1", "--port", "8080"],
+rag = subprocess.Popen(["python", "-m", "uvicorn", "rag_server:app", "--host", "127.0.0.1", "--port", "8765"],
                        stdout=open("rag.log", "w"), stderr=subprocess.STDOUT, env=os.environ.copy())
-if not tunggu("http://127.0.0.1:8080/", 240):
+if not tunggu("http://127.0.0.1:8765/", 240):
     print(open("rag.log").read()[-2500:])
     raise RuntimeError("server RAG gagal start")
 print("server RAG siap")
 ''')
 
 code(r'''!wget -q -O /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && chmod +x /usr/local/bin/cloudflared
-tun = subprocess.Popen(["cloudflared", "tunnel", "--url", "http://127.0.0.1:8080", "--no-autoupdate"],
+tun = subprocess.Popen(["cloudflared", "tunnel", "--url", "http://127.0.0.1:8765", "--no-autoupdate"],
                        stdout=open("tunnel.log", "w"), stderr=subprocess.STDOUT)
 URL = None
 for _ in range(60):
@@ -122,7 +122,7 @@ print("URL publik:", URL)
 print("base_url =", str(URL) + "/v1", "| API key =", API_KEY)
 ''')
 
-code(r'''r = requests.post("http://127.0.0.1:8080/v1/chat/completions",
+code(r'''r = requests.post("http://127.0.0.1:8765/v1/chat/completions",
                   headers={"Authorization": "Bearer " + API_KEY},
                   json={"messages": [{"role": "user", "content": "Buat hook MenuLayer::init di Geode yang menulis log."}],
                         "max_tokens": 400})
