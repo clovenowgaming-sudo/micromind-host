@@ -13,21 +13,42 @@ def code(t):
     C.append(("code", t))
 
 
-md("# MicroMind + RAG Geode di Colab\n"
+md("# MicroMind + RAG Geode di Colab (tanpa build)\n"
    "1. Runtime -> Change runtime type -> **T4 GPU**\n"
    "2. Colab Secrets: tambah `GITHUB_TOKEN` (scope `repo`) dan aktifkan akses notebook\n"
    "3. Ubah `API_KEY` di sel konfigurasi, lalu **Run all**\n\n"
+   "Pakai wheel `llama-cpp-python` CUDA yang sudah jadi (Python 3.12 lewat `uv`, karena wheel CUDA belum ada untuk Python 3.13 bawaan Colab). "
+   "Library CUDA dipasang lewat pip (`nvidia-cuda-runtime-cu12`, `nvidia-cublas-cu12`).\n\n"
    "Catatan: Colab gratis bukan hosting. Sesi bisa putus sewaktu-waktu dan URL tunnel berubah tiap sesi. "
-   "Aturan Colab membatasi penggunaan sebagai server layanan publik, jadi pakai untuk uji pribadi.")
+   "Aturan Colab membatasi pemakaian sebagai server layanan publik, jadi pakai untuk uji pribadi.")
 
-code("!pip install -q fastapi uvicorn httpx\n"
-     "![ -d llama.cpp ] || git clone --depth 1 https://github.com/ggml-org/llama.cpp\n"
-     "![ -x llama.cpp/build/bin/llama-server ] || (cd llama.cpp && cmake -B build -DGGML_CUDA=ON "
-     "-DCMAKE_CUDA_ARCHITECTURES=native -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release > /dev/null "
-     "&& cmake --build build --target llama-server -j 4 2>&1 | tail -n 3)")
+code(r'''!pip install -q uv fastapi uvicorn httpx
+import os, subprocess, requests, time, re, shutil
 
-code(r'''import os, requests, subprocess, time, re, shutil
-from google.colab import userdata
+V = "/content/venv312"
+
+def sh(c):
+    r = subprocess.run(c, shell=True, text=True, capture_output=True)
+    print((r.stdout + r.stderr)[-1200:])
+    if r.returncode:
+        raise RuntimeError("gagal: " + c[:90])
+
+if not os.path.exists(V + "/bin/python"):
+    sh("uv venv --python 3.12 " + V)
+    sh("uv pip install --python " + V + "/bin/python --index-strategy unsafe-best-match "
+       "--only-binary llama-cpp-python "
+       "--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124 "
+       "'llama-cpp-python[server]' nvidia-cuda-runtime-cu12 nvidia-cublas-cu12")
+
+LD = ":".join("%s/lib/python3.12/site-packages/nvidia/%s/lib" % (V, d) for d in ("cuda_runtime", "cublas"))
+env = dict(os.environ, LD_LIBRARY_PATH=LD + ":" + os.environ.get("LD_LIBRARY_PATH", ""))
+r = subprocess.run([V + "/bin/python", "-c",
+                    "import llama_cpp; print('llama-cpp-python', llama_cpp.__version__, '| GPU offload:', llama_cpp.llama_supports_gpu_offload())"],
+                   env=env, capture_output=True, text=True)
+print(r.stdout + r.stderr[-1500:])
+''')
+
+code(r'''from google.colab import userdata
 
 API_KEY = "ganti-kunci-rahasia"   # kunci untuk endpoint publik
 MODEL = "release"                  # "release" = MicroMind.gguf dari repo micromind, atau path .gguf di Drive
@@ -55,13 +76,14 @@ for a in rel["assets"]:
 for fn in ("rag_core.py", "rag_server.py"):
     code("%%writefile " + fn + "\n" + open(fn, encoding="utf-8").read())
 
-code(r'''subprocess.run("pkill -f llama-server; pkill -f uvicorn", shell=True)
+code(r'''subprocess.run("pkill -f llama_cpp.server; pkill -f uvicorn", shell=True)
 os.environ["API_KEY"] = API_KEY
 os.environ["DATA_DIR"] = "data"
 
-llama = subprocess.Popen(["llama.cpp/build/bin/llama-server", "-m", MODEL_PATH, "--host", "127.0.0.1",
-                          "--port", "8081", "-ngl", "99", "-c", "16384", "-np", "2"],
-                         stdout=open("llama.log", "w"), stderr=subprocess.STDOUT)
+llama = subprocess.Popen([V + "/bin/python", "-m", "llama_cpp.server", "--model", MODEL_PATH,
+                          "--model_alias", "micromind", "--n_gpu_layers", "-1", "--n_ctx", "16384",
+                          "--chat_format", "chatml", "--host", "127.0.0.1", "--port", "8081"],
+                         stdout=open("llama.log", "w"), stderr=subprocess.STDOUT, env=env)
 
 def tunggu(url, n):
     for _ in range(n):
@@ -73,10 +95,10 @@ def tunggu(url, n):
         time.sleep(2)
     return False
 
-if not tunggu("http://127.0.0.1:8081/health", 120):
+if not tunggu("http://127.0.0.1:8081/v1/models", 120):
     print(open("llama.log").read()[-2500:])
-    raise RuntimeError("llama-server gagal start")
-print("llama-server siap")
+    raise RuntimeError("server model gagal start")
+print("server model siap")
 
 rag = subprocess.Popen(["python", "-m", "uvicorn", "rag_server:app", "--host", "127.0.0.1", "--port", "8080"],
                        stdout=open("rag.log", "w"), stderr=subprocess.STDOUT, env=os.environ.copy())
@@ -107,8 +129,7 @@ code(r'''r = requests.post("http://127.0.0.1:8080/v1/chat/completions",
 print(r.json()["choices"][0]["message"]["content"])
 ''')
 
-code("import time\n"
-     "while True:   # biarkan sel ini berjalan agar sesi tidak idle; tekan stop untuk mematikan\n"
+code("while True:   # biarkan sel ini berjalan agar sesi tidak idle; tekan stop untuk mematikan\n"
      "    time.sleep(300)\n"
      "    print(time.strftime('%H:%M'), 'masih jalan', flush=True)\n")
 
